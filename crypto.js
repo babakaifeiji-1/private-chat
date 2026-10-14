@@ -1,12 +1,12 @@
 // 端到端加密工具：全部使用浏览器内置的 Web Crypto API，无第三方依赖。
 //
-// 房间名 + 口令 --PBKDF2-SHA256(600k 次)--> 512 bit
-//   前 256 bit  => AES-256-GCM 密钥（只存在于浏览器内存中）
-//   后 256 bit  => 再做 SHA-256 => roomId（发给服务器用来区分房间，无法反推口令/密钥）
+// 邀请链接 #k=<32 字节随机密钥(base64url)>，# 后的内容浏览器不会发送给任何服务器。
+// 链接密钥 --HKDF-SHA256--> 512 bit
+//   前 256 bit  => AES-256-GCM 密钥（只存在于浏览器中）
+//   后 256 bit  => 再做 SHA-256 => roomId（发给服务器区分聊天室，无法反推密钥）
 
 const te = new TextEncoder();
 const td = new TextDecoder();
-const PBKDF2_ITERATIONS = 600000;
 
 export function toHex(buf) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -28,11 +28,29 @@ export function b64ToBytes(b64) {
   return out;
 }
 
-export async function deriveRoom(roomName, passphrase) {
-  const base = await crypto.subtle.importKey('raw', te.encode(passphrase), 'PBKDF2', false, ['deriveBits']);
+const b64urlEncode = (bytes) => bytesToB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// 生成新的链接密钥（32 字节随机数）
+export function newLinkKey() {
+  return b64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+// 校验并解析链接密钥，非法返回 null
+export function parseLinkKey(s) {
+  if (typeof s !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(s)) return null;
+  try {
+    const bytes = b64ToBytes(s.replace(/-/g, '+').replace(/_/g, '/') + '=');
+    return bytes.length === 32 ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deriveRoom(linkKeyBytes) {
+  const base = await crypto.subtle.importKey('raw', linkKeyBytes, 'HKDF', false, ['deriveBits']);
   const bits = new Uint8Array(
     await crypto.subtle.deriveBits(
-      { name: 'PBKDF2', hash: 'SHA-256', salt: te.encode('privchat-v1|' + roomName), iterations: PBKDF2_ITERATIONS },
+      { name: 'HKDF', hash: 'SHA-256', salt: te.encode('privchat-v2'), info: te.encode('room-key') },
       base,
       512,
     ),

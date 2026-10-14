@@ -12,34 +12,43 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 登录页 -->
-  <main id="login" class="login">
-    <form id="login-form" class="card" autocomplete="off">
-      <h1>私密聊天室</h1>
-      <p class="hint">房间名和口令只在本机用来生成密钥，不会发送到服务器。</p>
-      <label for="nick">昵称</label>
-      <input id="nick" maxlength="20" required>
-      <label for="room">房间名</label>
-      <input id="room" maxlength="64" required>
-      <label for="pass">口令（建议 12 位以上）</label>
-      <input id="pass" type="password" minlength="8" required>
-      <label class="check"><input id="remember" type="checkbox"> 在此设备上记住（公共电脑请勿勾选）</label>
-      <button id="login-btn" type="submit">进入</button>
-      <p id="login-msg" class="msg" role="status" aria-live="polite"></p>
-    </form>
+  <!-- 没有邀请链接时 -->
+  <main id="nokey" class="center" hidden>
+    <div class="card">
+      <h1>需要邀请链接</h1>
+      <p class="hint">请使用朋友发给你的专属链接打开本页。</p>
+      <details>
+        <summary>我要创建一个新的聊天室</summary>
+        <p class="hint">会在你的浏览器里生成新的密钥和邀请链接，与任何已有聊天室无关。</p>
+        <button id="create" type="button">创建新聊天室</button>
+      </details>
+      <p id="nokey-msg" class="msg" role="status" aria-live="polite"></p>
+    </div>
   </main>
 
-  <!-- 聊天页 -->
+  <!-- 聊天页（打开即可预览） -->
   <main id="chat" class="chat" hidden>
     <header class="bar">
-      <span id="room-title" class="title"></span>
+      <span class="title">聊天室</span>
       <span id="status" class="status" role="status" aria-live="polite"></span>
-      <button id="logout" type="button" class="link">退出</button>
+      <button id="rename" type="button" class="link" hidden></button>
+      <button id="invite" type="button" class="link">邀请链接</button>
+      <button id="leave" type="button" class="link">退出</button>
     </header>
     <section id="list" class="list" aria-label="消息列表" aria-live="polite">
       <button id="older" type="button" class="older" hidden>加载更早的消息</button>
+      <p id="empty" class="empty" hidden>还没有消息</p>
     </section>
-    <form id="composer" class="composer">
+
+    <!-- 新用户：设置用户名后加入 -->
+    <form id="join" class="composer join" hidden>
+      <label for="join-name">你的名字</label>
+      <input id="join-name" maxlength="20" autocomplete="off">
+      <button type="submit">加入聊天</button>
+    </form>
+
+    <!-- 已加入：发消息 -->
+    <form id="composer" class="composer" hidden>
       <label for="file" class="icon-btn" title="发送图片" aria-label="发送图片">🖼</label>
       <input id="file" type="file" accept="image/*" hidden>
       <label for="text" class="sr-only">消息内容</label>
@@ -47,6 +56,21 @@
       <button id="send" type="submit">发送</button>
     </form>
   </main>
+
+  <!-- 邀请链接弹窗 -->
+  <div id="invite-dlg" class="viewer dlg" role="dialog" aria-modal="true" aria-labelledby="invite-title" hidden>
+    <div class="card">
+      <h2 id="invite-title">邀请链接</h2>
+      <p class="hint">拿到这个链接的人都能看到并参与聊天。请私下发送，不要发到微信等可能被审查的地方。</p>
+      <label for="invite-url" class="sr-only">邀请链接</label>
+      <textarea id="invite-url" rows="3" readonly></textarea>
+      <div class="row-btns">
+        <button id="invite-copy" type="button">复制</button>
+        <button id="invite-close" type="button" class="secondary">关闭</button>
+      </div>
+      <p id="invite-msg" class="msg ok" role="status" aria-live="polite"></p>
+    </div>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>
