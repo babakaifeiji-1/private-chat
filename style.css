@@ -10,47 +10,73 @@ body {
 button { font: inherit; cursor: pointer; border: 0; border-radius: 6px; padding: 8px 16px; background: #07c160; color: #fff; }
 button:disabled { opacity: .5; cursor: default; }
 button.secondary { background: #e5e5e5; color: #222; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible, .icon-btn:focus-within { outline: 2px solid #1677ff; outline-offset: 2px; }
+button.danger { background: #fff0f0; color: #c00; border: 1px solid #f3b8b8; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, .icon-btn:focus-within { outline: 2px solid #1677ff; outline-offset: 2px; }
 .link { background: none; color: #1677ff; padding: 4px 6px; font-size: 14px; }
+.link.icon { font-size: 20px; color: #333; }
+input, textarea, select { font: inherit; padding: 8px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
 
-/* 卡片 */
+/* 卡片 / 弹窗 */
 .center { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px; }
-.card { width: 100%; max-width: 380px; background: #fff; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 8px; }
-.card h1, .card h2 { margin: 0 0 4px; font-size: 20px; }
-.card textarea { font: inherit; font-size: 13px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; resize: none; word-break: break-all; }
-.card summary { cursor: pointer; color: #1677ff; font-size: 14px; }
-.card details button { margin-top: 4px; }
-.row-btns { display: flex; gap: 8px; }
+.card { width: 100%; max-width: 380px; background: #fff; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 10px; }
+.card h1, .dlg-body h2 { margin: 0 0 4px; font-size: 20px; }
+.stack { display: flex; flex-direction: column; gap: 6px; }
+.inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.inline label { font-size: 14px; min-width: 5em; }
+.inline input, .inline select { flex: 1; min-width: 0; }
+.row-btns { display: flex; gap: 8px; justify-content: flex-end; }
 .hint { font-size: 13px; color: #555; margin: 0; }
 .msg { font-size: 14px; color: #c00; min-height: 1em; margin: 0; }
 .msg.ok { color: #07843f; }
+.check { font-size: 14px; display: flex; gap: 6px; align-items: center; }
+label { font-size: 14px; }
+
+dialog { border: 0; border-radius: 12px; padding: 0; width: min(92vw, 420px); max-height: 90vh; }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+.dlg-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.dlg-body textarea { font-size: 13px; resize: none; word-break: break-all; }
+.danger-zone { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #eee; padding-top: 12px; }
+.rooms-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.rooms-list button { width: 100%; text-align: left; background: #f5f5f5; color: #111; }
+.rooms-list button[aria-current="true"] { background: #e3f7ea; font-weight: 600; }
+.preview { max-width: 100%; max-height: 55vh; object-fit: contain; border-radius: 6px; background: #f3f3f3; }
 
 /* 聊天 */
 .chat { height: 100%; display: flex; flex-direction: column; }
-.bar { display: flex; align-items: center; gap: 4px; padding: 8px 10px; background: #f7f7f7; border-bottom: 1px solid #ddd; }
-.title { font-weight: 600; flex: 1; }
+.bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: #f7f7f7; border-bottom: 1px solid #ddd; }
+.room-btn { flex: 1; min-width: 0; text-align: left; background: none; color: #111; font-weight: 600; padding: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status { font-size: 12px; color: #666; }
+.online-btn { background: none; color: #333; font-size: 13px; padding: 4px 6px; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #07c160; display: inline-block; }
+.online-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.online-list li { display: flex; align-items: center; gap: 6px; }
+.online-list .tag { font-size: 12px; color: #777; }
 .list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.list.drag { outline: 3px dashed #07c160; outline-offset: -8px; }
 .older { align-self: center; background: #ddd; color: #333; font-size: 13px; padding: 4px 12px; }
 .empty { align-self: center; color: #777; font-size: 14px; }
 
 .row { display: flex; flex-direction: column; align-items: flex-start; max-width: 100%; }
 .row.me { align-items: flex-end; }
-.meta { font-size: 12px; color: #555; margin: 0 4px 2px; }
+.row.sys { align-items: center; }
+.sys-text { font-size: 12px; color: #777; background: #e0e0e0; border-radius: 4px; padding: 2px 8px; }
+.meta { font-size: 12px; color: #555; margin: 0 4px 2px; display: flex; align-items: center; gap: 4px; }
+.more { background: none; color: #888; padding: 0 6px; font-size: 14px; line-height: 1.2; }
 .bubble { background: #fff; padding: 8px 12px; border-radius: 8px; max-width: min(75vw, 560px); white-space: pre-wrap; word-break: break-word; line-height: 1.45; }
 .row.me .bubble { background: #95ec69; }
 .bubble.bad { background: #fde2e2; color: #900; font-size: 13px; }
 .bubble img { display: block; max-width: min(60vw, 320px); max-height: 360px; border-radius: 4px; cursor: zoom-in; }
 .bubble.img { padding: 4px; }
+.actions { display: flex; gap: 6px; margin-top: 4px; }
+.actions button { font-size: 13px; padding: 3px 10px; background: #fff; color: #333; border: 1px solid #ddd; }
 
 .composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px; background: #f7f7f7; border-top: 1px solid #ddd; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
-.composer textarea { flex: 1; font: inherit; resize: none; border: 1px solid #ccc; border-radius: 6px; padding: 8px; max-height: 140px; }
+.composer textarea { flex: 1; resize: none; max-height: 140px; }
 .join { align-items: center; }
-.join label { font-size: 14px; white-space: nowrap; }
-.join input { flex: 1; min-width: 0; font: inherit; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+.join label { white-space: nowrap; }
+.join input { flex: 1; min-width: 0; }
 .icon-btn { font-size: 22px; line-height: 1; padding: 6px; cursor: pointer; user-select: none; }
 
-/* 图片预览 / 弹窗 */
+/* 大图 */
 .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.9); display: flex; align-items: center; justify-content: center; z-index: 10; cursor: zoom-out; }
 .viewer img { max-width: 100%; max-height: 100%; }
-.viewer.dlg { background: rgba(0,0,0,.5); cursor: default; padding: 16px; }

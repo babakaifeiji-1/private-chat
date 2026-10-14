@@ -12,42 +12,44 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 没有邀请链接时 -->
+  <!-- 还没有任何聊天室 -->
   <main id="nokey" class="center" hidden>
     <div class="card">
-      <h1>需要邀请链接</h1>
-      <p class="hint">请使用朋友发给你的专属链接打开本页。</p>
-      <details>
-        <summary>我要创建一个新的聊天室</summary>
-        <p class="hint">会在你的浏览器里生成新的密钥和邀请链接，与任何已有聊天室无关。</p>
-        <button id="create" type="button">创建新聊天室</button>
-      </details>
+      <h1>私密聊天室</h1>
+      <p class="hint">用朋友发来的邀请链接打开即可加入；也可以自己新建一个。</p>
+      <form id="nokey-join" class="stack">
+        <label for="nokey-link">粘贴邀请链接</label>
+        <input id="nokey-link" autocomplete="off" placeholder="https://…/#k=…">
+        <button type="submit">加入</button>
+      </form>
+      <button id="nokey-create" type="button" class="secondary">新建聊天室</button>
       <p id="nokey-msg" class="msg" role="status" aria-live="polite"></p>
     </div>
   </main>
 
-  <!-- 聊天页（打开即可预览） -->
+  <!-- 聊天页 -->
   <main id="chat" class="chat" hidden>
     <header class="bar">
-      <span class="title">聊天室</span>
+      <button id="rooms-btn" type="button" class="room-btn" aria-haspopup="dialog" title="切换 / 新建聊天室">
+        <span aria-hidden="true">☰</span> <span id="room-name"></span>
+      </button>
       <span id="status" class="status" role="status" aria-live="polite"></span>
-      <button id="rename" type="button" class="link" hidden></button>
-      <button id="invite" type="button" class="link">邀请链接</button>
-      <button id="leave" type="button" class="link">退出</button>
+      <button id="online-btn" type="button" class="online-btn" aria-haspopup="dialog" title="在线成员">
+        <span class="dot" aria-hidden="true"></span><span id="online-count">0</span> 人在线
+      </button>
+      <button id="settings-btn" type="button" class="link icon" aria-haspopup="dialog" aria-label="设置" title="设置">⚙</button>
     </header>
     <section id="list" class="list" aria-label="消息列表" aria-live="polite">
       <button id="older" type="button" class="older" hidden>加载更早的消息</button>
       <p id="empty" class="empty" hidden>还没有消息</p>
     </section>
 
-    <!-- 新用户：设置用户名后加入 -->
     <form id="join" class="composer join" hidden>
       <label for="join-name">你的名字</label>
       <input id="join-name" maxlength="20" autocomplete="off">
       <button type="submit">加入聊天</button>
     </form>
 
-    <!-- 已加入：发消息 -->
     <form id="composer" class="composer" hidden>
       <label for="file" class="icon-btn" title="发送图片" aria-label="发送图片">🖼</label>
       <input id="file" type="file" accept="image/*" hidden>
@@ -57,20 +59,91 @@
     </form>
   </main>
 
-  <!-- 邀请链接弹窗 -->
-  <div id="invite-dlg" class="viewer dlg" role="dialog" aria-modal="true" aria-labelledby="invite-title" hidden>
-    <div class="card">
-      <h2 id="invite-title">邀请链接</h2>
-      <p class="hint">拿到这个链接的人都能看到并参与聊天。请私下发送，不要发到微信等可能被审查的地方。</p>
-      <label for="invite-url" class="sr-only">邀请链接</label>
-      <textarea id="invite-url" rows="3" readonly></textarea>
-      <div class="row-btns">
-        <button id="invite-copy" type="button">复制</button>
-        <button id="invite-close" type="button" class="secondary">关闭</button>
-      </div>
-      <p id="invite-msg" class="msg ok" role="status" aria-live="polite"></p>
+  <!-- 在线成员 -->
+  <dialog id="online-dlg" aria-labelledby="online-title">
+    <div class="dlg-body">
+      <h2 id="online-title">在线成员</h2>
+      <ul id="online-list" class="online-list"></ul>
+      <p class="hint">每 15 秒刷新一次；同一个人多台设备会显示多次。</p>
+      <button type="button" class="secondary close-dlg">关闭</button>
     </div>
-  </div>
+  </dialog>
+
+  <!-- 聊天室列表 -->
+  <dialog id="rooms-dlg" aria-labelledby="rooms-title">
+    <div class="dlg-body">
+      <h2 id="rooms-title">我的聊天室</h2>
+      <ul id="rooms-list" class="rooms-list"></ul>
+      <button id="rooms-create" type="button">新建聊天室</button>
+      <form id="rooms-join" class="inline">
+        <label for="rooms-link" class="sr-only">邀请链接</label>
+        <input id="rooms-link" autocomplete="off" placeholder="粘贴邀请链接加入">
+        <button type="submit" class="secondary">加入</button>
+      </form>
+      <p id="rooms-msg" class="msg" role="status" aria-live="polite"></p>
+      <button type="button" class="secondary close-dlg">关闭</button>
+    </div>
+  </dialog>
+
+  <!-- 设置 -->
+  <dialog id="settings-dlg" aria-labelledby="settings-title">
+    <div class="dlg-body">
+      <h2 id="settings-title">设置</h2>
+
+      <form id="nick-form" class="inline">
+        <label for="nick-input">我的名字</label>
+        <input id="nick-input" maxlength="20" autocomplete="off">
+        <button type="submit" class="secondary">保存</button>
+      </form>
+
+      <form id="roomname-form" class="inline">
+        <label for="roomname-input">聊天室名称</label>
+        <input id="roomname-input" maxlength="40" autocomplete="off">
+        <button type="submit" class="secondary">保存</button>
+      </form>
+
+      <div class="stack">
+        <label for="invite-url">邀请链接（拿到的人都能看到并参与聊天，请私下发送）</label>
+        <textarea id="invite-url" rows="3" readonly></textarea>
+        <button id="invite-copy" type="button" class="secondary">复制邀请链接</button>
+      </div>
+
+      <div class="inline">
+        <label for="retention">消息保留</label>
+        <select id="retention">
+          <option value="">永久</option>
+          <option value="1">1 天</option>
+          <option value="7">7 天</option>
+          <option value="30">30 天</option>
+          <option value="90">90 天</option>
+          <option value="365">1 年</option>
+        </select>
+      </div>
+      <p id="usage" class="hint"></p>
+
+      <label class="check"><input id="notify" type="checkbox"> 新消息桌面通知（不显示内容）</label>
+
+      <div class="danger-zone">
+        <button id="clear-room" type="button" class="danger">清空本聊天室所有记录（所有人）</button>
+        <button id="leave-room" type="button" class="secondary">从此设备移除该聊天室</button>
+      </div>
+      <p id="settings-msg" class="msg ok" role="status" aria-live="polite"></p>
+      <button type="button" class="secondary close-dlg">关闭</button>
+    </div>
+  </dialog>
+
+  <!-- 发送图片前预览 -->
+  <dialog id="preview-dlg" aria-labelledby="preview-title">
+    <div class="dlg-body">
+      <h2 id="preview-title">发送图片？</h2>
+      <img id="preview-img" class="preview" alt="待发送的图片">
+      <p id="preview-info" class="hint"></p>
+      <div class="row-btns">
+        <button id="preview-send" type="button">发送</button>
+        <button type="button" class="secondary close-dlg">取消</button>
+      </div>
+    </div>
+  </dialog>
 
   <script type="module" src="app.js"></script>
 </body>
