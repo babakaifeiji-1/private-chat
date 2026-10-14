@@ -4,33 +4,40 @@ import { deriveRoom, newLinkKey, parseLinkKey, encryptJSON, decryptJSON, encrypt
 const $ = (id) => document.getElementById(id);
 const LS = {
   cid: 'privchat.cid',          // 本设备随机 id（放在加密消息里，区分“我自己”的消息）
-  dev: 'privchat.dev',          // 本设备私有密钥（用于生成撤回令牌，永不上传）
+  dev: 'privchat.dev',          // 本设备私有密钥（用于生成撤回/在线令牌，永不上传）
   nick: 'privchat.v2.nick',     // 我的名字
   oldKey: 'privchat.v2.key',    // 旧版单聊天室密钥（自动迁移）
   rooms: 'privchat.v3.rooms',   // [{k: 邀请链接密钥, name: 缓存的聊天室名}]
   cur: 'privchat.v3.current',   // 当前聊天室
   notify: 'privchat.notify',    // 桌面通知开关
+  hint: 'privchat.hint.menu',   // 是否已提示过“长按消息”
 };
 const hiddenKey = (roomId) => 'privchat.v3.hidden.' + roomId; // 仅本机删除的消息 id
 const POLL_VISIBLE_MS = 3000;
 const POLL_HIDDEN_MS = 15000;
-const REV_MARGIN = 5; // 增量同步时回看几个版本，防止并发写入时漏消息（重复的会被去重）
-const PAGE = 50;
 const HEARTBEAT_MS = 15000;
+const REV_MARGIN = 5;          // 增量同步时回看几个版本，防止并发写入时漏消息（重复的会被去重）
+const PAGE = 50;
 const MAX_IMG_SIDE = 1600;
 const MAX_IMG_BYTES = 2_000_000;
+const DB_LIMIT = 500 * 1024 * 1024; // Supabase 免费版数据库容量
+const GROUP_MS = 3 * 60000;    // 同一人 3 分钟内的连续消息合并显示
+const DIVIDER_MS = 5 * 60000;  // 间隔超过 5 分钟显示时间分隔
 const te = new TextEncoder();
+const isTouch = matchMedia('(hover: none)').matches;
 
 const lsGet = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } };
 const lsSet = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const randHex = (n) => toHex(crypto.getRandomValues(new Uint8Array(n)));
 const sha256hex = async (s) => toHex(await crypto.subtle.digest('SHA-256', te.encode(s)));
 const randomName = () => '用户-' + randHex(2).toUpperCase();
 const cleanName = (s) => String(s || '').trim().replace(/\s+/g, ' ').slice(0, 20);
-const cleanIp = (s) => (/^[0-9A-Fa-f:.]{2,45}$/.test(String(s || '')) ? String(s) : '');
+const cleanCity = (s) => String(s || '').trim().slice(0, 40);
 const cleanRoom = (s) => String(s || '').trim().replace(/\s+/g, ' ').slice(0, 40);
 const retentionLabel = (d) => (d == null ? '永久' : d === 365 ? '1 年' : `${d} 天`);
 const fmtBytes = (b) => (b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
+const pad = (n) => String(n).padStart(2, '0');
 
 let clientId = localStorage.getItem(LS.cid);
 if (!clientId) { clientId = crypto.randomUUID(); localStorage.setItem(LS.cid, clientId); }
@@ -39,18 +46,100 @@ if (!devSecret) { devSecret = randHex(32); localStorage.setItem(LS.dev, devSecre
 
 const state = {
   nick: localStorage.getItem(LS.nick) || '',
-  k: '', key: null, roomId: '', token: '', ownerHash: '', presSecret: '', myCid: '', hbTimer: null, online: [], myIp: '', seenCids: null,
+  k: '', key: null, roomId: '', token: '', ownerHash: '', presSecret: '', myCid: '',
   name: '', retention: null, clearedUpto: 0,
-  rev: 0, firstId: null, timer: null, polling: false, unread: 0, gen: 0,
-  hidden: new Set(), msgs: new Map(), pendingImg: null, stick: false,
+  rev: 0, firstId: null, timer: null, polling: false, unread: 0, gen: 0, newCount: 0,
+  hbTimer: null, online: [], myCity: '', seenCids: null,
+  hidden: new Set(), pendingImg: null, stick: false,
 };
 
+// ---------- 界面小工具 ----------
+function toast(text, kind = '', ms = 2600) {
+  const t = document.createElement('div');
+  t.className = 'toast' + (kind ? ' ' + kind : '');
+  t.textContent = text;
+  $('toasts').appendChild(t);
+  setTimeout(() => t.remove(), ms);
+}
+function banner(text) {
+  $('banner').textContent = text || '';
+  $('banner').hidden = !text;
+}
+// 页面内确认框（替代浏览器自带的 confirm）
+function confirmBox({ title, text = '', ok = '确定', danger = false }) {
+  return new Promise((resolve) => {
+    const dlg = $('confirm-dlg');
+    $('confirm-title').textContent = title;
+    $('confirm-text').textContent = text;
+    $('confirm-ok').textContent = ok;
+    $('confirm-ok').className = 'btn ' + (danger ? 'danger' : 'primary');
+    let result = false;
+    const done = (v) => { result = v; dlg.close(); };
+    $('confirm-ok').onclick = () => done(true);
+    $('confirm-cancel').onclick = () => done(false);
+    dlg.addEventListener('close', () => resolve(result), { once: true });
+    dlg.showModal();
+    $('confirm-cancel').focus();
+  });
+}
+// 头像：名字首字 + 由种子决定的颜色
+const PALETTE = ['#e5484d', '#f76b15', '#d6a10b', '#30a46c', '#12a594', '#0090ff', '#3e63dd', '#8e4ec6', '#d6409f', '#6f6e77'];
+function hashOf(s) { let h = 2166136261; for (const ch of String(s)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
+function paintAvatar(el, name, seed) {
+  const n = String(name || '?').replace(/^用户-/, '');
+  el.textContent = [...n][0]?.toUpperCase() || '?';
+  el.style.background = PALETTE[hashOf(seed || name) % PALETTE.length];
+}
+// 小图标（固定内容，无用户数据）
+function icon(id, cls = '') {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('aria-hidden', 'true');
+  if (cls) svg.setAttribute('class', cls);
+  const use = document.createElementNS(NS, 'use');
+  use.setAttribute('href', '#' + id);
+  svg.appendChild(use);
+  return svg;
+}
+function makeAvatar(name, seed) {
+  const a = document.createElement('span');
+  a.className = 'avatar';
+  a.setAttribute('aria-hidden', 'true');
+  paintAvatar(a, name, seed);
+  return a;
+}
+function fmtDivider(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff === 0) return hm;
+  if (diff === 1) return '昨天 ' + hm;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+async function copyText(text, okMsg = '已复制') {
+  try { await navigator.clipboard.writeText(text); toast(okMsg); return true; } catch { /* 回退 */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand('copy');
+  ta.remove();
+  toast(ok ? okMsg : '复制失败，请手动复制', ok ? '' : 'error');
+  return ok;
+}
+
 // ---------- Supabase RPC（直接 fetch，无第三方库） ----------
-async function rpc(fn, args) {
+function apiHeaders() {
   const headers = { 'Content-Type': 'application/json', apikey: SUPABASE_KEY };
   if (SUPABASE_KEY.startsWith('eyJ')) headers.Authorization = 'Bearer ' + SUPABASE_KEY; // 旧版 anon JWT
+  return headers;
+}
+async function rpc(fn, args) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-    method: 'POST', headers, body: JSON.stringify(args), cache: 'no-store',
+    method: 'POST', headers: apiHeaders(), body: JSON.stringify(args), cache: 'no-store',
   });
   if (!res.ok) throw new Error(`${fn} 失败 (${res.status}): ${(await res.text()).slice(0, 200)}`);
   const text = await res.text();
@@ -74,6 +163,7 @@ function extractKey(s) {
   const m = String(s || '').trim().match(/(?:[#&]k=)?([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])/);
   return m && parseLinkKey(m[1]) ? m[1] : null;
 }
+const inviteUrl = () => location.origin + location.pathname + '#k=' + state.k;
 
 // ---------- 启动 ----------
 function showNoKey(msg = '') {
@@ -105,7 +195,7 @@ async function init() {
   if (!rooms.length) return showNoKey(msg);
   const cur = localStorage.getItem(LS.cur);
   await openRoom(rooms.some((r) => r.k === cur) ? cur : rooms[0].k);
-  if (msg) setStatus(msg);
+  if (msg) toast(msg, 'error', 5000);
 }
 
 async function openRoom(k) {
@@ -118,25 +208,25 @@ async function openRoom(k) {
   $('chat').hidden = false;
 
   const { key, roomId } = await deriveRoom(parseLinkKey(k));
-  // 撤回令牌：只有这台设备能算出来；服务器只保存它的哈希
+  // 撤回令牌 / 在线令牌：只有这台设备能算出来；服务器只保存哈希
   const token = await sha256hex('owner|' + devSecret + '|' + roomId);
   const ownerHash = await sha256hex(token);
-  // 在线状态令牌：同样只有本设备知道，服务器只看到哈希
   const presSecret = await sha256hex('presence|' + devSecret + '|' + roomId);
   const myCid = await sha256hex(presSecret);
   if (gen !== state.gen) return;
   Object.assign(state, {
-    k, key, roomId, token, ownerHash, presSecret, myCid, online: [], myIp: '', seenCids: null,
+    k, key, roomId, token, ownerHash, presSecret, myCid, online: [], myCity: '', seenCids: null,
     name: getRooms().find((r) => r.k === k)?.name || '', retention: null, clearedUpto: 0,
-    rev: 0, firstId: null, unread: 0, polling: false,
-    hidden: new Set(lsGet(hiddenKey(roomId), [])), msgs: new Map(),
+    rev: 0, firstId: null, unread: 0, polling: false, newCount: 0,
+    hidden: new Set(lsGet(hiddenKey(roomId), [])),
   });
+  $('new-pill').hidden = true;
   renderRoomName();
   updateIdentityUI();
   updateTitle();
   renderOnline();
   startHeartbeat();
-  setStatus('加载中…');
+  banner('正在加载…');
   try {
     const res = await rpc('get_messages', { p_room: roomId, p_limit: PAGE });
     if (gen !== state.gen) return;
@@ -146,12 +236,12 @@ async function openRoom(k) {
     state.rev = res.max_rev || 0;
     state.firstId = res.messages.length ? res.messages[0].id : null;
     $('older').hidden = res.messages.length < PAGE;
-    updateEmpty();
+    afterChange();
     scrollToBottom();
-    setStatus('');
+    banner('');
     schedulePoll(POLL_VISIBLE_MS);
   } catch {
-    setStatus('连接失败，重试中…');
+    banner('连接失败，5 秒后重试…');
     state.timer = setTimeout(() => { if (gen === state.gen) openRoom(k); }, 5000);
   }
 }
@@ -180,6 +270,12 @@ function enforceRetention() {
   for (const row of $('list').querySelectorAll('.row')) if (+row.dataset.ts < cutoff) row.remove();
 }
 
+function renderRoomName() {
+  const name = state.name || '未命名聊天室';
+  $('room-name').textContent = name;
+  paintAvatar($('room-avatar'), name, state.roomId);
+}
+
 // ---------- 名字 ----------
 function updateIdentityUI() {
   const joined = !!state.nick;
@@ -192,6 +288,11 @@ function setNick(name) {
   localStorage.setItem(LS.nick, name);
   updateIdentityUI();
   if (state.key) startHeartbeat();
+}
+function showMenuHintOnce() {
+  if (lsGet(LS.hint, false)) return;
+  lsSet(LS.hint, true);
+  toast(isTouch ? '提示：长按消息可以复制、撤回或删除' : '提示：鼠标移到消息上点 ⋯（或右键）可以复制、撤回、删除', 'info', 6000);
 }
 
 // ---------- 在线状态 ----------
@@ -208,18 +309,17 @@ function startHeartbeat() {
       for (const r of rows) {
         try {
           const p = await decryptJSON(state.key, state.roomId, r.payload);
-          online.push({ cid: r.cid, me: r.cid === state.myCid, name: cleanName(p.n), joined: !!p.j, ip: cleanIp(r.ip) });
+          online.push({ cid: r.cid, me: r.cid === state.myCid, name: cleanName(p.n), joined: !!p.j, city: cleanCity(r.city) });
         } catch { /* 忽略无法解密的条目 */ }
       }
       const me = online.find((p) => p.me);
-      if (me) state.myIp = me.ip;
+      if (me) state.myCity = me.city;
       // 有新设备上线时提示（首次加载时不提示）
       if (state.seenCids) {
         const fresh = online.filter((p) => !p.me && !state.seenCids.has(p.cid));
         if (fresh.length) {
-          const text = fresh.map((p) => `${p.joined ? p.name : '访客'}（${p.ip || 'IP 未知'}）`).join('、');
-          setStatus('新设备上线：' + text);
-          setTimeout(() => { if ($('status').textContent.startsWith('新设备上线')) setStatus(''); }, 10000);
+          const text = fresh.map((p) => `${p.joined ? p.name : '访客'}（${p.city || '未知地区'}）`).join('、');
+          toast('新设备上线：' + text, 'info', 7000);
         }
       } else {
         state.seenCids = new Set();
@@ -236,43 +336,41 @@ function startHeartbeat() {
 function leavePresence() {
   clearTimeout(state.hbTimer);
   if (!state.roomId || !state.presSecret) return;
-  const headers = { 'Content-Type': 'application/json', apikey: SUPABASE_KEY };
-  if (SUPABASE_KEY.startsWith('eyJ')) headers.Authorization = 'Bearer ' + SUPABASE_KEY;
   // keepalive：页面关闭时请求也能发出去
   fetch(`${SUPABASE_URL}/rest/v1/rpc/leave_presence`, {
-    method: 'POST', headers, keepalive: true,
+    method: 'POST', headers: apiHeaders(), keepalive: true,
     body: JSON.stringify({ p_room: state.roomId, p_secret: state.presSecret }),
   }).catch(() => {});
 }
 
 function renderOnline() {
   $('online-count').textContent = String(state.online.length);
+  $('online-count2').textContent = `· ${state.online.length} 人`;
   const ul = $('online-list');
   ul.textContent = '';
   const sorted = [...state.online].sort((a, b) => (b.me - a.me) || (b.joined - a.joined) || a.name.localeCompare(b.name));
   for (const p of sorted) {
     const li = document.createElement('li');
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('span');
-    name.textContent = p.joined ? p.name || '?' : '访客';
-    const ip = document.createElement('span');
-    ip.className = 'ip';
-    ip.textContent = p.ip || 'IP 未知';
-    li.append(dot, name, ip);
-    const tagText = [p.me ? '我' : '', p.joined ? '' : '浏览中，未加入'].filter(Boolean).join('，');
-    if (tagText) {
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = `（${tagText}）`;
-      li.appendChild(tag);
-    }
+    li.className = 'person';
+    const display = p.joined ? p.name || '?' : '访客';
+    li.appendChild(makeAvatar(display, p.joined ? display : p.cid));
+    const main = document.createElement('div');
+    main.className = 'person-main';
+    const nameRow = document.createElement('span');
+    nameRow.className = 'person-name';
+    const nm = document.createElement('span');
+    nm.textContent = display;
+    nameRow.appendChild(nm);
+    const badge = (text, gray) => { const b = document.createElement('span'); b.className = 'badge' + (gray ? ' gray' : ''); b.textContent = text; nameRow.appendChild(b); };
+    if (p.me) badge('我');
+    if (!p.joined) badge('浏览中，未加入', true);
+    const city = document.createElement('span');
+    city.className = 'person-city';
+    city.append(icon('i-pin', 'pin'), document.createTextNode(p.city || '未知地区'));
+    main.append(nameRow, city);
+    li.appendChild(main);
     ul.appendChild(li);
   }
-}
-function renderRoomName() {
-  $('room-name').textContent = state.name || '未命名聊天室';
 }
 
 // ---------- 同步消息 ----------
@@ -293,18 +391,27 @@ async function poll() {
       if (state.firstId == null) state.firstId = m.id;
       if (r?.isNew && !r.mine) fresh++;
     }
+    enforceRetention();
+    afterChange();
     if (res.messages.length && atBottom) scrollToBottom();
+    else if (fresh) { state.newCount += fresh; showNewPill(); }
     state.stick = false;
     if (fresh && document.hidden) { state.unread += fresh; notifyNew(); }
-    enforceRetention();
-    updateEmpty();
     updateTitle();
-    setStatus('');
+    banner('');
   } catch {
-    if (gen === state.gen) setStatus('连接异常，重试中…');
+    if (gen === state.gen) banner('网络连接异常，正在重试…');
   } finally {
     if (gen === state.gen) state.polling = false;
   }
+}
+// 立刻同步一次（如果正在同步，等它结束后再来一次）
+async function pollNow() {
+  const gen = state.gen;
+  while (state.polling && gen === state.gen) await sleep(50);
+  if (gen !== state.gen) return;
+  await poll();
+  schedulePoll(POLL_VISIBLE_MS);
 }
 
 function schedulePoll(delay) {
@@ -320,6 +427,7 @@ async function loadOlder() {
   if (state.firstId == null) return;
   const gen = state.gen;
   $('older').disabled = true;
+  $('older').textContent = '加载中…';
   try {
     const res = await rpc('get_messages', { p_room: state.roomId, p_before: state.firstId, p_limit: PAGE });
     if (gen !== state.gen) return;
@@ -328,12 +436,13 @@ async function loadOlder() {
     for (const m of res.messages) await upsertRow(m, true);
     if (res.messages.length) state.firstId = res.messages[0].id;
     $('older').hidden = res.messages.length < PAGE;
+    afterChange();
     list.scrollTop += list.scrollHeight - prevHeight;
-    updateEmpty();
   } catch {
-    setStatus('加载失败');
+    toast('加载失败，请稍后再试', 'error');
   } finally {
     $('older').disabled = false;
+    $('older').textContent = '加载更早的消息';
   }
 }
 
@@ -357,7 +466,7 @@ async function upsertRow(m, older = false) {
 function insertSorted(node) {
   const id = +node.dataset.id;
   const rows = [...$('list').querySelectorAll('.row')];
-  let before = null;
+  let before = $('list').querySelector('.prow'); // 正在发送的占位气泡始终在最后
   for (let i = rows.length - 1; i >= 0; i--) {
     if (+rows[i].dataset.id < id) { before = rows[i].nextSibling; break; }
     if (i === 0) before = rows[0];
@@ -366,9 +475,34 @@ function insertSorted(node) {
 }
 
 function clearList() {
-  for (const n of $('list').querySelectorAll('.row')) n.remove();
+  for (const n of $('list').querySelectorAll('.row, .divider, .prow')) n.remove();
   $('older').hidden = true;
   $('empty').hidden = true;
+}
+
+// 列表变化后：重建时间分隔、合并连续消息、空状态
+function afterChange() {
+  const list = $('list');
+  for (const d of list.querySelectorAll('.divider')) d.remove();
+  let prev = null;
+  let lastTs = 0;
+  for (const row of list.querySelectorAll('.row')) {
+    const ts = +row.dataset.ts;
+    let broke = false;
+    if (!lastTs || ts - lastTs > DIVIDER_MS) {
+      const d = document.createElement('div');
+      d.className = 'divider';
+      d.textContent = fmtDivider(ts);
+      row.before(d);
+      broke = true;
+    }
+    const cont = !broke && prev && !row.classList.contains('sys') && !prev.classList.contains('sys')
+      && prev.dataset.sender === row.dataset.sender && ts - +prev.dataset.ts < GROUP_MS;
+    row.classList.toggle('cont', !!cont);
+    prev = row;
+    lastTs = ts;
+  }
+  $('empty').hidden = !!list.querySelector('.row, .prow');
 }
 
 // ---------- 渲染（全部使用 textContent，避免 XSS） ----------
@@ -386,7 +520,6 @@ async function renderRow(m) {
   row.className = 'row';
   row.dataset.id = m.id;
   row.dataset.ts = Date.parse(m.created_at);
-  const time = new Date(m.created_at).toLocaleString('zh-CN', { hour12: false });
 
   let msg;
   try {
@@ -404,24 +537,30 @@ async function renderRow(m) {
   if (msg.t === 'retention') return sysRow(row, `${who}将消息保留时间设为${retentionLabel(msg.d ?? null)}`);
   if (msg.t === 'clear') return sysRow(row, `${who}清空了聊天记录`);
 
-  state.msgs.set(m.id, msg);
+  row.dataset.sender = String(msg.c || '') + '|' + name;
   if (mine) row.classList.add('me');
-  const meta = document.createElement('div');
-  meta.className = 'meta';
-  const label = document.createElement('span');
-  const ip = cleanIp(msg.ip);
-  label.textContent = `${name}${ip ? `（${ip}）` : ''} · ${time}`;
-  const more = document.createElement('button');
-  more.type = 'button';
-  more.className = 'more';
-  more.textContent = '⋯';
-  more.setAttribute('aria-label', '消息操作');
-  more.setAttribute('aria-expanded', 'false');
-  more.addEventListener('click', () => toggleActions(row, m.id, msg, mine, more));
-  if (mine) meta.append(more, label); else meta.append(label, more);
+  row.appendChild(makeAvatar(name, name));
 
+  const body = document.createElement('div');
+  body.className = 'body';
+  const whoEl = document.createElement('div');
+  whoEl.className = 'who';
+  const nm = document.createElement('span');
+  nm.textContent = mine ? '我' : name;
+  whoEl.appendChild(nm);
+  const loc = cleanCity(msg.loc);
+  if (loc) {
+    const l = document.createElement('span');
+    l.className = 'loc';
+    l.append(icon('i-pin', 'pin'), document.createTextNode(loc));
+    whoEl.appendChild(l);
+  }
+
+  const line = document.createElement('div');
+  line.className = 'line';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
+  bubble.title = new Date(m.created_at).toLocaleString('zh-CN', { hour12: false });
   if (msg.t === 'img' && typeof msg.b === 'string') {
     bubble.classList.add('img');
     bubble.textContent = '图片加载中…';
@@ -429,47 +568,81 @@ async function renderRow(m) {
   } else {
     bubble.textContent = String(msg.x ?? '');
   }
-  row.append(meta, bubble);
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'more';
+  more.setAttribute('aria-label', '消息操作');
+  more.appendChild(icon('i-more'));
+  const open = () => openMsgMenu(m.id, msg, mine, more);
+  more.addEventListener('click', open);
+  attachLongPress(bubble, open);
+  line.append(bubble, more);
+  body.append(whoEl, line);
+  row.appendChild(body);
   return row;
 }
 
-function toggleActions(row, id, msg, mine, btn) {
-  const open = row.querySelector('.actions');
-  if (open) { open.remove(); btn.setAttribute('aria-expanded', 'false'); return; }
-  const bar = document.createElement('div');
-  bar.className = 'actions';
-  const add = (text, fn) => {
+// 长按（手机）/ 右键（电脑）打开消息菜单
+function attachLongPress(el, fn) {
+  let timer = null;
+  let sx = 0;
+  let sy = 0;
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); fn(); });
+  el.addEventListener('touchstart', (e) => {
+    const p = e.touches[0];
+    sx = p.clientX; sy = p.clientY;
+    timer = setTimeout(() => { timer = null; fn(); }, 500);
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    const p = e.touches[0];
+    if (timer && (Math.abs(p.clientX - sx) > 10 || Math.abs(p.clientY - sy) > 10)) { clearTimeout(timer); timer = null; }
+  }, { passive: true });
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  el.addEventListener('touchend', cancel);
+  el.addEventListener('touchcancel', cancel);
+}
+
+function openMsgMenu(id, msg, mine, btn) {
+  const dlg = $('msg-dlg');
+  if (dlg.open) return;
+  $('msg-preview').textContent = msg.t === 'img' ? '[图片]' : String(msg.x ?? '').slice(0, 120);
+  const box = $('msg-actions');
+  box.textContent = '';
+  const add = (text, fn, cls = '') => {
     const b = document.createElement('button');
     b.type = 'button';
+    b.className = 'btn ' + cls;
     b.textContent = text;
-    b.addEventListener('click', fn);
-    bar.appendChild(b);
+    b.addEventListener('click', () => { dlg.close(); fn(); });
+    box.appendChild(b);
   };
-  if (msg.t !== 'img') add('复制', async () => { try { await navigator.clipboard.writeText(String(msg.x ?? '')); setStatus('已复制'); } catch { setStatus('复制失败'); } bar.remove(); });
-  if (mine) add('撤回', () => recall(id));
-  add('删除', () => deleteLocal(id));
-  row.appendChild(bar);
-  btn.setAttribute('aria-expanded', 'true');
-  bar.querySelector('button').focus();
+  if (msg.t !== 'img') add('复制', () => copyText(String(msg.x ?? '')));
+  if (mine) add('撤回（所有人都看不到）', () => recall(id));
+  add('删除（仅从本设备删除）', () => deleteLocal(id), 'danger');
+  btn?.setAttribute('aria-expanded', 'true');
+  dlg.addEventListener('close', () => btn?.setAttribute('aria-expanded', 'false'), { once: true });
+  dlg.showModal();
+  box.querySelector('button')?.focus();
 }
 
 async function recall(id) {
   try {
     const payload = await encryptJSON(state.key, state.roomId, { t: 'recall', n: state.nick, c: clientId, ts: Date.now() });
     const ok = await rpc('recall_message', { p_room: state.roomId, p_id: id, p_token: state.token, p_payload: payload });
-    if (!ok) alert('无法撤回：只能撤回在这台设备上发送的消息');
-    schedulePoll(0);
-  } catch (e) {
-    alert('撤回失败：' + e.message);
+    if (!ok) toast('无法撤回：只能撤回在这台设备上发送的消息', 'error', 4000);
+    else toast('已撤回');
+    pollNow();
+  } catch {
+    toast('撤回失败，请检查网络', 'error');
   }
 }
 
 function deleteLocal(id) {
-  if (!confirm('仅从此设备删除这条消息？（其他人仍能看到；要让所有人都看不到请用“撤回”）')) return;
   state.hidden.add(id);
   lsSet(hiddenKey(state.roomId), [...state.hidden].slice(-5000));
   rowEl(id)?.remove();
-  updateEmpty();
+  afterChange();
+  toast('已从本设备删除');
 }
 
 async function loadImage(msg, bubble) {
@@ -482,7 +655,7 @@ async function loadImage(msg, bubble) {
     const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
     const img = document.createElement('img');
     img.src = url;
-    img.alt = '图片';
+    img.alt = '图片（点击查看大图）';
     img.tabIndex = 0;
     img.addEventListener('click', () => openViewer(url));
     img.addEventListener('keydown', (e) => { if (e.key === 'Enter') openViewer(url); });
@@ -514,26 +687,49 @@ function openViewer(url) {
 }
 
 // ---------- 发消息 ----------
+// 发送中的占位气泡
+function addPending(text) {
+  const p = document.createElement('div');
+  p.className = 'prow';
+  const body = document.createElement('div');
+  body.className = 'body';
+  const b = document.createElement('div');
+  b.className = 'bubble pending';
+  b.textContent = text;
+  const ts = document.createElement('div');
+  ts.className = 'ts';
+  ts.textContent = '发送中…';
+  body.append(b, ts);
+  p.appendChild(body);
+  $('list').appendChild(p);
+  $('empty').hidden = true;
+  scrollToBottom();
+  return p;
+}
+
 async function sendPayload(obj, blobId = null) {
-  const payload = await encryptJSON(state.key, state.roomId, { ...obj, n: state.nick || '某人', c: clientId, ip: state.myIp, ts: Date.now() });
+  const payload = await encryptJSON(state.key, state.roomId, { ...obj, n: state.nick || '某人', c: clientId, loc: state.myCity, ts: Date.now() });
   await rpc('send_message', { p_room: state.roomId, p_payload: payload, p_owner_hash: state.ownerHash, p_blob_id: blobId });
   state.stick = true;
-  schedulePoll(0);
+  await pollNow();
 }
 
 async function sendText() {
   const ta = $('text');
   const text = ta.value.trim();
   if (!text || !state.nick) return;
-  $('send').disabled = true;
+  ta.value = '';
+  autoGrow();
+  updateSendBtn();
+  const p = addPending(text);
   try {
     await sendPayload({ t: 'text', x: text });
-    ta.value = '';
-    autoGrow();
-  } catch (e) {
-    alert('发送失败：' + e.message);
+  } catch {
+    if (!ta.value) { ta.value = text; autoGrow(); updateSendBtn(); }
+    toast('发送失败，消息已放回输入框，请重试', 'error', 4000);
   } finally {
-    $('send').disabled = false;
+    p.remove();
+    afterChange();
     ta.focus();
   }
 }
@@ -569,34 +765,34 @@ async function compressImage(file) {
 async function previewImage(file) {
   if (!file || !file.type.startsWith('image/') || !state.nick || !state.key) return;
   try {
-    setStatus('处理图片…');
     const img = await compressImage(file);
-    setStatus('');
     if (state.pendingImg) URL.revokeObjectURL(state.pendingImg.url);
     state.pendingImg = { ...img, url: URL.createObjectURL(img.blob) };
     $('preview-img').src = state.pendingImg.url;
-    $('preview-info').textContent = `${img.w}×${img.h}，${fmtBytes(img.bytes.length)}（已压缩并去除位置信息）`;
+    $('preview-info').textContent = `${img.w}×${img.h} · ${fmtBytes(img.bytes.length)} · 已压缩并去除位置信息`;
     $('preview-dlg').showModal();
     $('preview-send').focus();
-  } catch (e) {
-    setStatus('');
-    alert('无法读取图片：' + e.message);
+  } catch {
+    toast('无法读取这张图片', 'error');
   }
 }
 
 async function sendPendingImage() {
   const p = state.pendingImg;
+  state.pendingImg = null; // 交给发送流程，关闭弹窗时不要回收
   $('preview-dlg').close();
   if (!p) return;
-  setStatus('图片加密上传中…');
+  const ph = addPending('图片发送中…');
   try {
     const data = await encryptBytes(state.key, state.roomId, p.bytes);
     const blobId = await rpc('put_blob', { p_room: state.roomId, p_data: data });
     await sendPayload({ t: 'img', b: blobId }, blobId);
-    setStatus('');
-  } catch (e) {
-    setStatus('');
-    alert('图片发送失败：' + e.message);
+  } catch {
+    toast('图片发送失败，请重试', 'error');
+  } finally {
+    URL.revokeObjectURL(p.url);
+    ph.remove();
+    afterChange();
   }
 }
 
@@ -608,8 +804,19 @@ function openRoomsDialog() {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = r.name || '未命名聊天室';
-    if (r.k === state.k) b.setAttribute('aria-current', 'true');
+    const name = r.name || '未命名聊天室';
+    b.appendChild(makeAvatar(name, r.k === state.k ? state.roomId : r.k));
+    const label = document.createElement('span');
+    label.className = 'room-label';
+    label.textContent = name;
+    b.appendChild(label);
+    if (r.k === state.k) {
+      b.setAttribute('aria-current', 'true');
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = '当前';
+      b.appendChild(badge);
+    }
     b.addEventListener('click', () => { $('rooms-dlg').close(); if (r.k !== state.k) openRoom(r.k); });
     li.appendChild(b);
     ul.appendChild(li);
@@ -619,18 +826,25 @@ function openRoomsDialog() {
   $('rooms-dlg').showModal();
 }
 
-async function createRoom() {
-  const input = prompt('给新聊天室起个名字', '聊天室-' + randHex(2).toUpperCase());
-  if (input === null) return;
-  const name = cleanRoom(input) || '新聊天室';
+function openCreateDialog() {
+  if ($('rooms-dlg').open) $('rooms-dlg').close();
+  $('create-name').value = '聊天室-' + randHex(2).toUpperCase();
+  $('create-dlg').showModal();
+  $('create-name').select();
+}
+
+async function createRoom(e) {
+  e.preventDefault();
+  const name = cleanRoom($('create-name').value) || '新聊天室';
+  $('create-dlg').close();
   const k = newLinkKey();
   addRoom(k, name);
-  if ($('rooms-dlg').open) $('rooms-dlg').close();
   await openRoom(k);
   try {
     await rpc('set_room_name', { p_room: state.roomId, p_name_payload: await encryptJSON(state.key, state.roomId, { name }) });
   } catch { /* 下次修改名称时会再保存 */ }
-  openSettings('聊天室已创建，复制下面的邀请链接发给朋友');
+  toast('聊天室已创建');
+  openInvite();
 }
 
 function joinByLink(text, msgEl) {
@@ -641,27 +855,33 @@ function joinByLink(text, msgEl) {
   openRoom(k);
 }
 
+function openInvite() {
+  $('invite-url').value = inviteUrl();
+  $('invite-share').hidden = !navigator.share;
+  $('invite-dlg').showModal();
+  $('invite-copy').focus();
+}
+
 // ---------- 设置 ----------
-async function openSettings(msg = '') {
+function openSettings() {
   $('nick-input').value = state.nick;
   $('roomname-input').value = state.name;
-  $('invite-url').value = location.origin + location.pathname + '#k=' + state.k;
   $('retention').value = state.retention == null ? '' : String(state.retention);
   $('notify').checked = !!lsGet(LS.notify, false) && 'Notification' in window && Notification.permission === 'granted';
   $('notify').disabled = !('Notification' in window);
-  $('settings-msg').textContent = msg;
   $('settings-dlg').showModal();
   refreshUsage();
 }
 
 async function refreshUsage() {
-  $('usage').textContent = '存储占用：计算中…';
+  $('usage').textContent = '正在计算存储占用…';
   try {
     const u = await rpc('room_usage', { p_room: state.roomId });
-    $('usage').textContent = `本聊天室：${u.messages} 条消息、${u.images} 张图片，约 ${fmtBytes(u.bytes)}。`
-      + `数据库总占用 ${fmtBytes(u.db_bytes)} / 500 MB（Supabase 免费额度）。`;
+    $('usage').textContent = `本聊天室 ${u.messages} 条消息、${u.images} 张图片，约 ${fmtBytes(u.bytes)}。`
+      + `数据库共用 ${fmtBytes(u.db_bytes)} / 500 MB（免费额度）。`;
+    $('usage-bar').style.width = Math.min(100, (u.db_bytes / DB_LIMIT) * 100).toFixed(1) + '%';
   } catch {
-    $('usage').textContent = '存储占用：获取失败';
+    $('usage').textContent = '存储占用获取失败';
   }
 }
 
@@ -675,37 +895,36 @@ async function saveRoomName(e) {
     cacheRoomName(state.k, name);
     renderRoomName();
     await sendPayload({ t: 'rename', name });
-    $('settings-msg').textContent = '聊天室名称已修改';
-  } catch (err) {
-    alert('修改失败：' + err.message);
+    toast('聊天室名称已修改');
+  } catch {
+    toast('修改失败，请检查网络', 'error');
   }
 }
 
 async function changeRetention() {
   const v = $('retention').value;
   const d = v === '' ? null : parseInt(v, 10);
+  const revert = () => { $('retention').value = state.retention == null ? '' : String(state.retention); };
   if (d === state.retention) return;
-  if (d != null && !confirm(`超过 ${retentionLabel(d)}的消息和图片将被永久删除（对所有人生效），确定？`)) {
-    $('retention').value = state.retention == null ? '' : String(state.retention);
-    return;
-  }
+  if (d != null && !(await confirmBox({ title: `只保留最近 ${retentionLabel(d)}的消息？`, text: '更早的消息和图片会被永久删除，对所有人生效。', ok: '确定', danger: true }))) return revert();
   try {
     await rpc('set_retention', { p_room: state.roomId, p_days: d });
     state.retention = d;
     enforceRetention();
     await sendPayload({ t: 'retention', d });
-    $('settings-msg').textContent = '保留时间已设为' + retentionLabel(d);
+    toast('消息保留时间：' + retentionLabel(d));
     refreshUsage();
-  } catch (err) {
-    alert('设置失败：' + err.message);
+  } catch {
+    revert();
+    toast('设置失败，请检查网络', 'error');
   }
 }
 
 async function toggleNotify() {
   if (!$('notify').checked) { lsSet(LS.notify, false); return; }
   const perm = await Notification.requestPermission();
-  if (perm === 'granted') { lsSet(LS.notify, true); $('settings-msg').textContent = '已开启桌面通知'; }
-  else { $('notify').checked = false; $('settings-msg').textContent = '浏览器未允许通知'; }
+  if (perm === 'granted') { lsSet(LS.notify, true); toast('已开启桌面通知'); }
+  else { $('notify').checked = false; toast('浏览器没有允许通知', 'error'); }
 }
 
 function notifyNew() {
@@ -714,25 +933,26 @@ function notifyNew() {
 }
 
 async function clearRoom() {
-  if (!confirm('将永久删除本聊天室的所有消息和图片（所有人都看不到了），无法恢复。确定？')) return;
+  if (!(await confirmBox({ title: '清空所有聊天记录？', text: '本聊天室的所有消息和图片会被永久删除，所有人都看不到了，无法恢复。', ok: '清空', danger: true }))) return;
   try {
     await rpc('clear_room', { p_room: state.roomId });
     clearList();
     await sendPayload({ t: 'clear' });
-    $('settings-msg').textContent = '已清空';
+    toast('已清空');
     refreshUsage();
-  } catch (err) {
-    alert('清空失败：' + err.message);
+  } catch {
+    toast('清空失败，请检查网络', 'error');
   }
 }
 
-function leaveRoom() {
-  if (!confirm('从此设备移除该聊天室？（聊天记录不会被删除，以后可用邀请链接重新加入）')) return;
+async function leaveRoom() {
+  if (!(await confirmBox({ title: '从此设备移除该聊天室？', text: '聊天记录不会被删除，以后可以用邀请链接重新加入。', ok: '移除' }))) return;
   saveRooms(getRooms().filter((r) => r.k !== state.k));
   localStorage.removeItem(hiddenKey(state.roomId));
   $('settings-dlg').close();
   const rest = getRooms();
-  if (rest.length) openRoom(rest[0].k); else { localStorage.removeItem(LS.cur); showNoKey('已移除'); }
+  if (rest.length) openRoom(rest[0].k); else { localStorage.removeItem(LS.cur); showNoKey(); }
+  toast('已移除');
 }
 
 // ---------- 小工具 ----------
@@ -740,55 +960,75 @@ function isNearBottom() {
   const l = $('list');
   return l.scrollHeight - l.scrollTop - l.clientHeight < 80;
 }
-function scrollToBottom() { const l = $('list'); l.scrollTop = l.scrollHeight; }
-function updateEmpty() { $('empty').hidden = !!$('list').querySelector('.row'); }
-function setStatus(s) { $('status').textContent = s; }
+function scrollToBottom() {
+  const l = $('list');
+  l.scrollTop = l.scrollHeight;
+  state.newCount = 0;
+  $('new-pill').hidden = true;
+}
+function showNewPill() {
+  $('new-pill').textContent = `↓ ${state.newCount} 条新消息`;
+  $('new-pill').hidden = false;
+}
 function updateTitle() { document.title = state.unread ? `(${state.unread}) Notes` : 'Notes'; }
 function autoGrow() {
   const ta = $('text');
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+  ta.style.overflowY = ta.scrollHeight > 140 ? 'auto' : 'hidden';
 }
+function updateSendBtn() { $('send').disabled = !$('text').value.trim(); }
 
 // ---------- 事件绑定 ----------
 $('nokey-join').addEventListener('submit', (e) => { e.preventDefault(); joinByLink($('nokey-link').value, $('nokey-msg')); });
-$('nokey-create').addEventListener('click', createRoom);
+$('nokey-create').addEventListener('click', openCreateDialog);
+$('create-form').addEventListener('submit', createRoom);
 $('rooms-btn').addEventListener('click', openRoomsDialog);
-$('online-btn').addEventListener('click', () => { renderOnline(); $('online-dlg').showModal(); });
-$('rooms-create').addEventListener('click', createRoom);
+$('rooms-create').addEventListener('click', openCreateDialog);
 $('rooms-join').addEventListener('submit', (e) => { e.preventDefault(); joinByLink($('rooms-link').value, $('rooms-msg')); });
-$('settings-btn').addEventListener('click', () => openSettings());
+$('invite-btn').addEventListener('click', openInvite);
+$('settings-invite').addEventListener('click', () => { $('settings-dlg').close(); openInvite(); });
+$('empty-invite').addEventListener('click', () => copyText(inviteUrl(), '邀请链接已复制，发给朋友吧'));
+$('invite-copy').addEventListener('click', () => copyText($('invite-url').value, '邀请链接已复制'));
+$('invite-share').addEventListener('click', () => navigator.share?.({ title: '邀请你加入聊天', url: $('invite-url').value }).catch(() => {}));
+$('online-btn').addEventListener('click', () => { renderOnline(); $('online-dlg').showModal(); });
+$('settings-btn').addEventListener('click', openSettings);
 $('nick-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const n = cleanName($('nick-input').value);
-  if (n) { setNick(n); $('settings-msg').textContent = '名字已保存'; }
+  if (n && n !== state.nick) { setNick(n); toast('名字已改为 ' + n); }
 });
 $('roomname-form').addEventListener('submit', saveRoomName);
-$('invite-copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText($('invite-url').value); } catch { $('invite-url').select(); document.execCommand('copy'); }
-  $('settings-msg').textContent = '邀请链接已复制';
-});
 $('retention').addEventListener('change', changeRetention);
 $('notify').addEventListener('change', toggleNotify);
 $('clear-room').addEventListener('click', clearRoom);
 $('leave-room').addEventListener('click', leaveRoom);
 for (const b of document.querySelectorAll('.close-dlg')) b.addEventListener('click', () => b.closest('dialog').close());
+// 点击弹窗外的遮罩关闭
+for (const d of document.querySelectorAll('dialog')) {
+  d.addEventListener('click', (e) => { if (e.target === d && d.id !== 'confirm-dlg') d.close(); });
+}
 $('preview-send').addEventListener('click', sendPendingImage);
 $('preview-dlg').addEventListener('close', () => {
   if (state.pendingImg) { URL.revokeObjectURL(state.pendingImg.url); state.pendingImg = null; }
-  $('text').focus();
+  if (!$('composer').hidden) $('text').focus();
 });
 
 $('join').addEventListener('submit', (e) => {
   e.preventDefault();
   setNick(cleanName($('join-name').value) || randomName());
+  toast('欢迎，' + state.nick);
+  showMenuHintOnce();
   $('text').focus();
 });
 $('older').addEventListener('click', loadOlder);
+$('new-pill').addEventListener('click', scrollToBottom);
+$('list').addEventListener('scroll', () => { if (!$('new-pill').hidden && isNearBottom()) { state.newCount = 0; $('new-pill').hidden = true; } }, { passive: true });
 $('composer').addEventListener('submit', (e) => { e.preventDefault(); sendText(); });
-$('text').addEventListener('input', autoGrow);
+$('text').addEventListener('input', () => { autoGrow(); updateSendBtn(); });
 $('text').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); }
+  // 电脑：Enter 发送，Shift+Enter 换行；手机：回车换行，用发送按钮发送
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !isTouch) { e.preventDefault(); sendText(); }
 });
 $('file').addEventListener('change', (e) => { previewImage(e.target.files[0]); e.target.value = ''; });
 $('text').addEventListener('paste', (e) => {

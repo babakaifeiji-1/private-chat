@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f6f7f9">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'">
   <title>Notes</title>
@@ -12,135 +14,230 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 还没有任何聊天室 -->
-  <main id="nokey" class="center" hidden>
-    <div class="card">
+  <!-- SVG 图标 -->
+  <svg width="0" height="0" class="sr-only" aria-hidden="true">
+    <symbol id="i-invite" viewBox="0 0 24 24"><path d="M15 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM4 20c0-3.3 3.6-6 8-6m6 0v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 10c0-3.9 3.1-7 7-7s7 3.1 7 7M17 3.5a4 4 0 0 1 0 7.5M22 21c0-3-1.8-5.4-4.3-6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-1.6.1-1.4-.1-1.4 2-1.6-2-3.4-2.4 1a7 7 0 0 0-2.4-1.4L14.2 2h-4.4l-.4 2.6A7 7 0 0 0 7 6L4.6 5 2.6 8.4l2 1.6-.1 1.4.1 1.4-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2.4 1.4l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2.4-1.4l2.4 1 2-3.4-2-1.6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="10" r="2" fill="currentColor"/><path d="m4 18 5-5 4 4 3-3 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M3 11.5 21 3l-8.5 18-2.2-7.3L3 11.5Z" fill="currentColor"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21Z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="9.5" r="2.5" fill="currentColor"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></symbol>
+  </svg>
+
+  <!-- 首页（还没有聊天室） -->
+  <main id="nokey" class="landing" hidden>
+    <div class="landing-card">
+      <div class="logo" aria-hidden="true"><svg><use href="#i-lock"/></svg></div>
       <h1>私密聊天室</h1>
-      <p class="hint">用朋友发来的邀请链接打开即可加入；也可以自己新建一个。</p>
-      <form id="nokey-join" class="stack">
-        <label for="nokey-link">粘贴邀请链接</label>
-        <input id="nokey-link" autocomplete="off" placeholder="https://…/#k=…">
-        <button type="submit">加入</button>
+      <ul class="features">
+        <li>端到端加密，服务器看不到内容</li>
+        <li>不用注册，点开邀请链接就能聊</li>
+        <li>支持文字、图片、撤回</li>
+      </ul>
+      <button id="nokey-create" type="button" class="btn primary big">新建聊天室</button>
+      <div class="or"><span>或者</span></div>
+      <form id="nokey-join" class="field-row">
+        <label for="nokey-link" class="sr-only">邀请链接</label>
+        <input id="nokey-link" autocomplete="off" placeholder="粘贴朋友发来的邀请链接">
+        <button type="submit" class="btn">加入</button>
       </form>
-      <button id="nokey-create" type="button" class="secondary">新建聊天室</button>
-      <p id="nokey-msg" class="msg" role="status" aria-live="polite"></p>
+      <p id="nokey-msg" class="form-msg" role="status" aria-live="polite"></p>
     </div>
   </main>
 
   <!-- 聊天页 -->
   <main id="chat" class="chat" hidden>
-    <header class="bar">
-      <button id="rooms-btn" type="button" class="room-btn" aria-haspopup="dialog" title="切换 / 新建聊天室">
-        <span aria-hidden="true">☰</span> <span id="room-name"></span>
+    <header class="topbar">
+      <button id="rooms-btn" type="button" class="room-switch" aria-haspopup="dialog" title="切换或新建聊天室">
+        <span id="room-avatar" class="avatar" aria-hidden="true"></span>
+        <span class="room-text">
+          <span class="room-title"><span id="room-name"></span><svg class="chev" aria-hidden="true"><use href="#i-down"/></svg></span>
+          <span class="room-sub"><span class="dot" aria-hidden="true"></span><span id="online-count">0</span> 人在线 · <svg class="mini" aria-hidden="true"><use href="#i-lock"/></svg>已加密</span>
+        </span>
       </button>
-      <span id="status" class="status" role="status" aria-live="polite"></span>
-      <button id="online-btn" type="button" class="online-btn" aria-haspopup="dialog" title="在线成员">
-        <span class="dot" aria-hidden="true"></span><span id="online-count">0</span> 人在线
-      </button>
-      <button id="settings-btn" type="button" class="link icon" aria-haspopup="dialog" aria-label="设置" title="设置">⚙</button>
+      <nav class="top-actions" aria-label="聊天室操作">
+        <button id="invite-btn" type="button" class="tool" aria-haspopup="dialog"><svg aria-hidden="true"><use href="#i-invite"/></svg><span>邀请</span></button>
+        <button id="online-btn" type="button" class="tool" aria-haspopup="dialog"><svg aria-hidden="true"><use href="#i-users"/></svg><span>成员</span></button>
+        <button id="settings-btn" type="button" class="tool" aria-haspopup="dialog"><svg aria-hidden="true"><use href="#i-gear"/></svg><span>设置</span></button>
+      </nav>
     </header>
-    <section id="list" class="list" aria-label="消息列表" aria-live="polite">
-      <button id="older" type="button" class="older" hidden>加载更早的消息</button>
-      <p id="empty" class="empty" hidden>还没有消息</p>
-    </section>
+    <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
 
-    <form id="join" class="composer join" hidden>
-      <label for="join-name">你的名字</label>
-      <input id="join-name" maxlength="20" autocomplete="off">
-      <button type="submit">加入聊天</button>
+    <section id="list" class="list" aria-label="消息列表">
+      <button id="older" type="button" class="older" hidden>加载更早的消息</button>
+      <div id="empty" class="empty" hidden>
+        <div class="empty-icon" aria-hidden="true"><svg><use href="#i-invite"/></svg></div>
+        <p class="empty-title">还没有消息</p>
+        <p class="empty-text">把邀请链接发给朋友，他们点开就能看到并加入聊天。</p>
+        <button id="empty-invite" type="button" class="btn primary">复制邀请链接</button>
+      </div>
+    </section>
+    <button id="new-pill" type="button" class="new-pill" hidden></button>
+
+    <form id="join" class="joinbar" hidden>
+      <p class="join-hint">起个名字就能开始聊天（也可以直接用随机名）</p>
+      <div class="field-row">
+        <label for="join-name" class="sr-only">你的名字</label>
+        <input id="join-name" maxlength="20" autocomplete="off">
+        <button type="submit" class="btn primary">加入聊天</button>
+      </div>
     </form>
 
     <form id="composer" class="composer" hidden>
-      <label for="file" class="icon-btn" title="发送图片" aria-label="发送图片">🖼</label>
-      <input id="file" type="file" accept="image/*" hidden>
+      <label for="file" class="icon-btn" title="发送图片（也可以直接粘贴或拖入）">
+        <svg aria-hidden="true"><use href="#i-image"/></svg><span class="sr-only">发送图片</span>
+      </label>
+      <input id="file" type="file" accept="image/*" class="sr-only" tabindex="-1">
       <label for="text" class="sr-only">消息内容</label>
-      <textarea id="text" rows="1" maxlength="5000" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
-      <button id="send" type="submit">发送</button>
+      <textarea id="text" rows="1" maxlength="5000" placeholder="发消息…"></textarea>
+      <button id="send" type="submit" class="send-btn" aria-label="发送" disabled><svg aria-hidden="true"><use href="#i-send"/></svg></button>
     </form>
   </main>
 
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <!-- 新建聊天室 -->
+  <dialog id="create-dlg" aria-labelledby="create-title">
+    <form id="create-form" class="sheet">
+      <h2 id="create-title">新建聊天室</h2>
+      <label for="create-name">聊天室名称</label>
+      <input id="create-name" maxlength="40" autocomplete="off" required>
+      <p class="hint">创建后会生成专属邀请链接，发给谁谁就能加入。</p>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost close-dlg">取消</button>
+        <button type="submit" class="btn primary">创建</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 邀请 -->
+  <dialog id="invite-dlg" aria-labelledby="invite-title">
+    <div class="sheet">
+      <h2 id="invite-title">邀请朋友</h2>
+      <p class="hint">朋友点开这个链接就能看到聊天内容并加入。请<b>私下</b>发送，不要发到可能被审查的地方。</p>
+      <label for="invite-url" class="sr-only">邀请链接</label>
+      <textarea id="invite-url" class="link-box" rows="3" readonly></textarea>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost close-dlg">关闭</button>
+        <button id="invite-share" type="button" class="btn" hidden>分享…</button>
+        <button id="invite-copy" type="button" class="btn primary">复制链接</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- 在线成员 -->
   <dialog id="online-dlg" aria-labelledby="online-title">
-    <div class="dlg-body">
-      <h2 id="online-title">在线成员</h2>
-      <ul id="online-list" class="online-list"></ul>
-      <p class="hint">每 15 秒刷新一次；同一个人多台设备会显示多次。IP 由服务器识别；用 VPN/代理时显示的是代理的 IP，手机网络的 IP 也会经常变化。</p>
-      <button type="button" class="secondary close-dlg">关闭</button>
+    <div class="sheet">
+      <h2 id="online-title">在线成员 <span id="online-count2" class="count"></span></h2>
+      <ul id="online-list" class="people"></ul>
+      <p class="hint">城市由服务器根据网络识别（不显示 IP）；用 VPN/代理时显示的是代理所在地。同一个人的多台设备会分别显示。</p>
+      <div class="sheet-actions"><button type="button" class="btn primary close-dlg">好的</button></div>
     </div>
   </dialog>
 
   <!-- 聊天室列表 -->
   <dialog id="rooms-dlg" aria-labelledby="rooms-title">
-    <div class="dlg-body">
+    <div class="sheet">
       <h2 id="rooms-title">我的聊天室</h2>
-      <ul id="rooms-list" class="rooms-list"></ul>
-      <button id="rooms-create" type="button">新建聊天室</button>
-      <form id="rooms-join" class="inline">
+      <ul id="rooms-list" class="rooms"></ul>
+      <button id="rooms-create" type="button" class="btn primary"><svg aria-hidden="true"><use href="#i-plus"/></svg>新建聊天室</button>
+      <form id="rooms-join" class="field-row">
         <label for="rooms-link" class="sr-only">邀请链接</label>
         <input id="rooms-link" autocomplete="off" placeholder="粘贴邀请链接加入">
-        <button type="submit" class="secondary">加入</button>
+        <button type="submit" class="btn">加入</button>
       </form>
-      <p id="rooms-msg" class="msg" role="status" aria-live="polite"></p>
-      <button type="button" class="secondary close-dlg">关闭</button>
+      <p id="rooms-msg" class="form-msg" role="status" aria-live="polite"></p>
+      <div class="sheet-actions"><button type="button" class="btn ghost close-dlg">关闭</button></div>
     </div>
   </dialog>
 
   <!-- 设置 -->
   <dialog id="settings-dlg" aria-labelledby="settings-title">
-    <div class="dlg-body">
+    <div class="sheet">
       <h2 id="settings-title">设置</h2>
 
-      <form id="nick-form" class="inline">
-        <label for="nick-input">我的名字</label>
-        <input id="nick-input" maxlength="20" autocomplete="off">
-        <button type="submit" class="secondary">保存</button>
-      </form>
+      <section class="group" aria-labelledby="g-me">
+        <h3 id="g-me">我的</h3>
+        <form id="nick-form" class="field-row">
+          <label for="nick-input" class="field-label">名字</label>
+          <input id="nick-input" maxlength="20" autocomplete="off">
+          <button type="submit" class="btn">保存</button>
+        </form>
+        <label class="switch"><input id="notify" type="checkbox"><span>新消息桌面通知（不显示内容）</span></label>
+      </section>
 
-      <form id="roomname-form" class="inline">
-        <label for="roomname-input">聊天室名称</label>
-        <input id="roomname-input" maxlength="40" autocomplete="off">
-        <button type="submit" class="secondary">保存</button>
-      </form>
+      <section class="group" aria-labelledby="g-room">
+        <h3 id="g-room">聊天室</h3>
+        <form id="roomname-form" class="field-row">
+          <label for="roomname-input" class="field-label">名称</label>
+          <input id="roomname-input" maxlength="40" autocomplete="off">
+          <button type="submit" class="btn">保存</button>
+        </form>
+        <button id="settings-invite" type="button" class="btn wide"><svg aria-hidden="true"><use href="#i-invite"/></svg>邀请朋友 / 复制邀请链接</button>
+      </section>
 
-      <div class="stack">
-        <label for="invite-url">邀请链接（拿到的人都能看到并参与聊天，请私下发送）</label>
-        <textarea id="invite-url" rows="3" readonly></textarea>
-        <button id="invite-copy" type="button" class="secondary">复制邀请链接</button>
-      </div>
+      <section class="group" aria-labelledby="g-store">
+        <h3 id="g-store">存储</h3>
+        <div class="field-row">
+          <label for="retention" class="field-label">消息保留</label>
+          <select id="retention">
+            <option value="">永久</option>
+            <option value="1">1 天</option>
+            <option value="7">7 天</option>
+            <option value="30">30 天</option>
+            <option value="90">90 天</option>
+            <option value="365">1 年</option>
+          </select>
+        </div>
+        <div class="meter" aria-hidden="true"><div id="usage-bar"></div></div>
+        <p id="usage" class="hint"></p>
+      </section>
 
-      <div class="inline">
-        <label for="retention">消息保留</label>
-        <select id="retention">
-          <option value="">永久</option>
-          <option value="1">1 天</option>
-          <option value="7">7 天</option>
-          <option value="30">30 天</option>
-          <option value="90">90 天</option>
-          <option value="365">1 年</option>
-        </select>
-      </div>
-      <p id="usage" class="hint"></p>
+      <section class="group danger" aria-labelledby="g-danger">
+        <h3 id="g-danger">危险操作</h3>
+        <button id="clear-room" type="button" class="btn danger wide">清空本聊天室所有记录（所有人）</button>
+        <button id="leave-room" type="button" class="btn ghost wide">从此设备移除该聊天室</button>
+      </section>
 
-      <label class="check"><input id="notify" type="checkbox"> 新消息桌面通知（不显示内容）</label>
-
-      <div class="danger-zone">
-        <button id="clear-room" type="button" class="danger">清空本聊天室所有记录（所有人）</button>
-        <button id="leave-room" type="button" class="secondary">从此设备移除该聊天室</button>
-      </div>
-      <p id="settings-msg" class="msg ok" role="status" aria-live="polite"></p>
-      <button type="button" class="secondary close-dlg">关闭</button>
+      <div class="sheet-actions"><button type="button" class="btn primary close-dlg">完成</button></div>
     </div>
   </dialog>
 
-  <!-- 发送图片前预览 -->
+  <!-- 消息操作 -->
+  <dialog id="msg-dlg" aria-labelledby="msg-title">
+    <div class="sheet compact">
+      <h2 id="msg-title" class="sr-only">消息操作</h2>
+      <p id="msg-preview" class="msg-preview"></p>
+      <div id="msg-actions" class="action-list"></div>
+      <button type="button" class="btn ghost wide close-dlg">取消</button>
+    </div>
+  </dialog>
+
+  <!-- 确认 -->
+  <dialog id="confirm-dlg" aria-labelledby="confirm-title">
+    <div class="sheet compact">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text" class="hint"></p>
+      <div class="sheet-actions">
+        <button id="confirm-cancel" type="button" class="btn ghost">取消</button>
+        <button id="confirm-ok" type="button" class="btn primary">确定</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 图片预览 -->
   <dialog id="preview-dlg" aria-labelledby="preview-title">
-    <div class="dlg-body">
-      <h2 id="preview-title">发送图片？</h2>
+    <div class="sheet">
+      <h2 id="preview-title">发送这张图片？</h2>
       <img id="preview-img" class="preview" alt="待发送的图片">
       <p id="preview-info" class="hint"></p>
-      <div class="row-btns">
-        <button id="preview-send" type="button">发送</button>
-        <button type="button" class="secondary close-dlg">取消</button>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost close-dlg">取消</button>
+        <button id="preview-send" type="button" class="btn primary">发送</button>
       </div>
     </div>
   </dialog>

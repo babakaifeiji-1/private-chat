@@ -9,6 +9,13 @@
 
 create sequence if not exists public.chat_rev_seq;
 
+-- http 扩展：用于服务器端把 IP 转成城市（Supabase 自带；不可用时城市显示为“未知地区”，其它功能不受影响）
+do $$ begin
+  create extension if not exists http with schema extensions;
+exception when others then
+  raise notice 'http 扩展不可用，城市将显示为未知: %', sqlerrm;
+end $$;
+
 create table if not exists public.messages (
   id         bigint generated always as identity primary key,
   room       text        not null check (room ~ '^[0-9a-f]{64}$'),
@@ -49,13 +56,22 @@ create table if not exists public.presence (
   last_seen timestamptz not null default now(),
   primary key (room, cid)
 );
-alter table public.presence add column if not exists ip text;
+alter table public.presence add column if not exists city text;
+alter table public.presence drop column if exists ip;  -- 不再保存原始 IP
+
+-- IP → 城市 缓存：只存 IP 的哈希，7 天过期
+create table if not exists public.ip_geo (
+  ip_hash    text        primary key,
+  city       text,
+  updated_at timestamptz not null default now()
+);
 
 alter table public.messages enable row level security;
 alter table public.blobs    enable row level security;
 alter table public.rooms    enable row level security;
 alter table public.presence enable row level security;
-revoke all on public.messages, public.blobs, public.rooms, public.presence from anon, authenticated;
+alter table public.ip_geo   enable row level security;
+revoke all on public.messages, public.blobs, public.rooms, public.presence, public.ip_geo from anon, authenticated;
 revoke all on sequence public.chat_rev_seq from anon, authenticated;
 
 -- 旧版本函数（签名变化）
@@ -201,18 +217,60 @@ begin
   return v;
 end $$;
 
--- 心跳：更新自己的在线状态（含服务器识别的 IP），返回 40 秒内活跃的成员
--- 离线 10 分钟后记录（包括 IP）自动删除
+-- 内部：IP → 城市（如“广东 深圳”）。先查缓存，未命中时调用 ip-api.com（超时 2.5 秒），失败返回 null
+create or replace function public._ip_city(p_ip text)
+returns text language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_hash text;
+  v_city text;
+  j json;
+  country text; region text; city text;
+begin
+  if p_ip is null then return null; end if;
+  if p_ip ~ '^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' or p_ip = '::1' then return '局域网'; end if;
+  v_hash := encode(sha256(convert_to('ipgeo|' || p_ip, 'UTF8')), 'hex');
+  select g.city into v_city from public.ip_geo g where g.ip_hash = v_hash and g.updated_at > now() - interval '7 days';
+  if found then return v_city; end if;
+
+  begin
+    perform http_set_curlopt('CURLOPT_TIMEOUT_MS', '2500');
+    select content::json into j from http_get('http://ip-api.com/json/' || p_ip || '?lang=zh-CN&fields=status,country,regionName,city');
+  exception when others then
+    return null;  -- 查询失败不缓存，下次再试
+  end;
+  if j is null or j->>'status' not in ('success', 'fail') then return null; end if;
+
+  if j->>'status' = 'success' then  -- 'fail' = 查不到（也缓存，避免反复查询）
+    country := nullif(trim(j->>'country'), '');
+    region  := nullif(trim(j->>'regionName'), '');
+    city    := nullif(trim(j->>'city'), '');
+    if region is not null and city is not null and (city = region or city like region || '%' or region like city || '%') then region := null; end if;
+    v_city := concat_ws(' ', case when country = '中国' then null else country end, region, city);
+    v_city := left(nullif(v_city, ''), 40);
+  end if;
+
+  insert into public.ip_geo (ip_hash, city, updated_at) values (v_hash, v_city, now())
+  on conflict (ip_hash) do update set city = excluded.city, updated_at = now();
+  delete from public.ip_geo where updated_at < now() - interval '7 days';
+  return v_city;
+end $$;
+
+-- 心跳：更新自己的在线状态（服务器根据 IP 识别城市，不保存 IP），返回 40 秒内活跃的成员
+-- 离线 10 分钟后记录自动删除
 create or replace function public.heartbeat(p_room text, p_secret text, p_payload text)
 returns json language plpgsql security definer set search_path = public as $$
-declare v_cid text := encode(sha256(convert_to(p_secret, 'UTF8')), 'hex');
-        v_ip  text := public._client_ip();
+declare v_cid  text := encode(sha256(convert_to(p_secret, 'UTF8')), 'hex');
+        v_city text;
 begin
   if length(p_secret) < 32 then raise exception 'bad secret'; end if;
-  insert into public.presence (room, cid, payload, last_seen, ip) values (p_room, v_cid, p_payload, now(), v_ip)
-  on conflict (room, cid) do update set payload = excluded.payload, last_seen = now(), ip = excluded.ip;
+  v_city := public._ip_city(public._client_ip());  -- 有缓存时只是一次索引查询
+  if v_city is null then  -- 查询失败时沿用上次的结果
+    select p.city into v_city from public.presence p where p.room = p_room and p.cid = v_cid;
+  end if;
+  insert into public.presence (room, cid, payload, last_seen, city) values (p_room, v_cid, p_payload, now(), v_city)
+  on conflict (room, cid) do update set payload = excluded.payload, last_seen = now(), city = excluded.city;
   delete from public.presence where room = p_room and last_seen < now() - interval '10 minutes';
-  return coalesce((select json_agg(json_build_object('cid', p.cid, 'payload', p.payload, 'ip', p.ip) order by p.cid)
+  return coalesce((select json_agg(json_build_object('cid', p.cid, 'payload', p.payload, 'city', p.city) order by p.cid)
                    from public.presence p
                    where p.room = p_room and p.last_seen > now() - interval '40 seconds'), '[]'::json);
 end $$;
@@ -246,6 +304,7 @@ revoke all on function public.set_retention(text, int)                    from p
 revoke all on function public.clear_room(text)                            from public, anon, authenticated;
 revoke all on function public.room_usage(text)                            from public, anon, authenticated;
 revoke all on function public._client_ip()                                from public, anon, authenticated;
+revoke all on function public._ip_city(text)                              from public, anon, authenticated;
 revoke all on function public.heartbeat(text, text, text)                 from public, anon, authenticated;
 revoke all on function public.leave_presence(text, text)                  from public, anon, authenticated;
 grant execute on function public.heartbeat(text, text, text)              to anon, authenticated;
