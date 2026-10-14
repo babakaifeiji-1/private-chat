@@ -27,6 +27,7 @@ const randHex = (n) => toHex(crypto.getRandomValues(new Uint8Array(n)));
 const sha256hex = async (s) => toHex(await crypto.subtle.digest('SHA-256', te.encode(s)));
 const randomName = () => '用户-' + randHex(2).toUpperCase();
 const cleanName = (s) => String(s || '').trim().replace(/\s+/g, ' ').slice(0, 20);
+const cleanIp = (s) => (/^[0-9A-Fa-f:.]{2,45}$/.test(String(s || '')) ? String(s) : '');
 const cleanRoom = (s) => String(s || '').trim().replace(/\s+/g, ' ').slice(0, 40);
 const retentionLabel = (d) => (d == null ? '永久' : d === 365 ? '1 年' : `${d} 天`);
 const fmtBytes = (b) => (b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
@@ -38,7 +39,7 @@ if (!devSecret) { devSecret = randHex(32); localStorage.setItem(LS.dev, devSecre
 
 const state = {
   nick: localStorage.getItem(LS.nick) || '',
-  k: '', key: null, roomId: '', token: '', ownerHash: '', presSecret: '', myCid: '', hbTimer: null, online: [],
+  k: '', key: null, roomId: '', token: '', ownerHash: '', presSecret: '', myCid: '', hbTimer: null, online: [], myIp: '', seenCids: null,
   name: '', retention: null, clearedUpto: 0,
   rev: 0, firstId: null, timer: null, polling: false, unread: 0, gen: 0,
   hidden: new Set(), msgs: new Map(), pendingImg: null, stick: false,
@@ -125,7 +126,7 @@ async function openRoom(k) {
   const myCid = await sha256hex(presSecret);
   if (gen !== state.gen) return;
   Object.assign(state, {
-    k, key, roomId, token, ownerHash, presSecret, myCid, online: [],
+    k, key, roomId, token, ownerHash, presSecret, myCid, online: [], myIp: '', seenCids: null,
     name: getRooms().find((r) => r.k === k)?.name || '', retention: null, clearedUpto: 0,
     rev: 0, firstId: null, unread: 0, polling: false,
     hidden: new Set(lsGet(hiddenKey(roomId), [])), msgs: new Map(),
@@ -207,9 +208,23 @@ function startHeartbeat() {
       for (const r of rows) {
         try {
           const p = await decryptJSON(state.key, state.roomId, r.payload);
-          online.push({ me: r.cid === state.myCid, name: cleanName(p.n), joined: !!p.j });
+          online.push({ cid: r.cid, me: r.cid === state.myCid, name: cleanName(p.n), joined: !!p.j, ip: cleanIp(r.ip) });
         } catch { /* 忽略无法解密的条目 */ }
       }
+      const me = online.find((p) => p.me);
+      if (me) state.myIp = me.ip;
+      // 有新设备上线时提示（首次加载时不提示）
+      if (state.seenCids) {
+        const fresh = online.filter((p) => !p.me && !state.seenCids.has(p.cid));
+        if (fresh.length) {
+          const text = fresh.map((p) => `${p.joined ? p.name : '访客'}（${p.ip || 'IP 未知'}）`).join('、');
+          setStatus('新设备上线：' + text);
+          setTimeout(() => { if ($('status').textContent.startsWith('新设备上线')) setStatus(''); }, 10000);
+        }
+      } else {
+        state.seenCids = new Set();
+      }
+      for (const p of online) state.seenCids.add(p.cid);
       state.online = online;
       renderOnline();
     } catch { /* 网络问题，下次再试 */ }
@@ -242,7 +257,10 @@ function renderOnline() {
     dot.setAttribute('aria-hidden', 'true');
     const name = document.createElement('span');
     name.textContent = p.joined ? p.name || '?' : '访客';
-    li.append(dot, name);
+    const ip = document.createElement('span');
+    ip.className = 'ip';
+    ip.textContent = p.ip || 'IP 未知';
+    li.append(dot, name, ip);
     const tagText = [p.me ? '我' : '', p.joined ? '' : '浏览中，未加入'].filter(Boolean).join('，');
     if (tagText) {
       const tag = document.createElement('span');
@@ -391,7 +409,8 @@ async function renderRow(m) {
   const meta = document.createElement('div');
   meta.className = 'meta';
   const label = document.createElement('span');
-  label.textContent = `${name} · ${time}`;
+  const ip = cleanIp(msg.ip);
+  label.textContent = `${name}${ip ? `（${ip}）` : ''} · ${time}`;
   const more = document.createElement('button');
   more.type = 'button';
   more.className = 'more';
@@ -496,7 +515,7 @@ function openViewer(url) {
 
 // ---------- 发消息 ----------
 async function sendPayload(obj, blobId = null) {
-  const payload = await encryptJSON(state.key, state.roomId, { ...obj, n: state.nick || '某人', c: clientId, ts: Date.now() });
+  const payload = await encryptJSON(state.key, state.roomId, { ...obj, n: state.nick || '某人', c: clientId, ip: state.myIp, ts: Date.now() });
   await rpc('send_message', { p_room: state.roomId, p_payload: payload, p_owner_hash: state.ownerHash, p_blob_id: blobId });
   state.stick = true;
   schedulePoll(0);

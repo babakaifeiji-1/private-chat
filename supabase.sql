@@ -49,6 +49,7 @@ create table if not exists public.presence (
   last_seen timestamptz not null default now(),
   primary key (room, cid)
 );
+alter table public.presence add column if not exists ip text;
 
 alter table public.messages enable row level security;
 alter table public.blobs    enable row level security;
@@ -182,16 +183,36 @@ returns json language sql stable security definer set search_path = public as $$
     'db_bytes', pg_database_size(current_database()));
 $$;
 
--- 心跳：更新自己的在线状态，返回 40 秒内活跃的成员
+-- 内部：从请求头取访问者 IP（cf-connecting-ip 由 Cloudflare 设置，不能被客户端伪造，优先使用）
+create or replace function public._client_ip()
+returns text language plpgsql stable set search_path = public as $$
+declare h json; v text;
+begin
+  begin
+    h := nullif(current_setting('request.headers', true), '')::json;
+  exception when others then
+    return null;
+  end;
+  if h is null then return null; end if;
+  v := coalesce(nullif(trim(h->>'cf-connecting-ip'), ''),
+                nullif(trim(split_part(h->>'x-forwarded-for', ',', 1)), ''),
+                nullif(trim(h->>'x-real-ip'), ''));
+  if v is null or v !~ '^[0-9A-Fa-f:.]{2,45}$' then return null; end if;
+  return v;
+end $$;
+
+-- 心跳：更新自己的在线状态（含服务器识别的 IP），返回 40 秒内活跃的成员
+-- 离线 10 分钟后记录（包括 IP）自动删除
 create or replace function public.heartbeat(p_room text, p_secret text, p_payload text)
 returns json language plpgsql security definer set search_path = public as $$
 declare v_cid text := encode(sha256(convert_to(p_secret, 'UTF8')), 'hex');
+        v_ip  text := public._client_ip();
 begin
   if length(p_secret) < 32 then raise exception 'bad secret'; end if;
-  insert into public.presence (room, cid, payload, last_seen) values (p_room, v_cid, p_payload, now())
-  on conflict (room, cid) do update set payload = excluded.payload, last_seen = now();
+  insert into public.presence (room, cid, payload, last_seen, ip) values (p_room, v_cid, p_payload, now(), v_ip)
+  on conflict (room, cid) do update set payload = excluded.payload, last_seen = now(), ip = excluded.ip;
   delete from public.presence where room = p_room and last_seen < now() - interval '10 minutes';
-  return coalesce((select json_agg(json_build_object('cid', p.cid, 'payload', p.payload) order by p.cid)
+  return coalesce((select json_agg(json_build_object('cid', p.cid, 'payload', p.payload, 'ip', p.ip) order by p.cid)
                    from public.presence p
                    where p.room = p_room and p.last_seen > now() - interval '40 seconds'), '[]'::json);
 end $$;
@@ -224,6 +245,7 @@ revoke all on function public.set_room_name(text, text)                   from p
 revoke all on function public.set_retention(text, int)                    from public, anon, authenticated;
 revoke all on function public.clear_room(text)                            from public, anon, authenticated;
 revoke all on function public.room_usage(text)                            from public, anon, authenticated;
+revoke all on function public._client_ip()                                from public, anon, authenticated;
 revoke all on function public.heartbeat(text, text, text)                 from public, anon, authenticated;
 revoke all on function public.leave_presence(text, text)                  from public, anon, authenticated;
 grant execute on function public.heartbeat(text, text, text)              to anon, authenticated;
