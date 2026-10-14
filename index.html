@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'">
+  <title>Notes</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 登录页 -->
+  <main id="login" class="login">
+    <form id="login-form" class="card" autocomplete="off">
+      <h1>私密聊天室</h1>
+      <p class="hint">房间名和口令只在本机用来生成密钥，不会发送到服务器。</p>
+      <label for="nick">昵称</label>
+      <input id="nick" maxlength="20" required>
+      <label for="room">房间名</label>
+      <input id="room" maxlength="64" required>
+      <label for="pass">口令（建议 12 位以上）</label>
+      <input id="pass" type="password" minlength="8" required>
+      <label class="check"><input id="remember" type="checkbox"> 在此设备上记住（公共电脑请勿勾选）</label>
+      <button id="login-btn" type="submit">进入</button>
+      <p id="login-msg" class="msg" role="status" aria-live="polite"></p>
+    </form>
+  </main>
+
+  <!-- 聊天页 -->
+  <main id="chat" class="chat" hidden>
+    <header class="bar">
+      <span id="room-title" class="title"></span>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+      <button id="logout" type="button" class="link">退出</button>
+    </header>
+    <section id="list" class="list" aria-label="消息列表" aria-live="polite">
+      <button id="older" type="button" class="older" hidden>加载更早的消息</button>
+    </section>
+    <form id="composer" class="composer">
+      <label for="file" class="icon-btn" title="发送图片" aria-label="发送图片">🖼</label>
+      <input id="file" type="file" accept="image/*" hidden>
+      <label for="text" class="sr-only">消息内容</label>
+      <textarea id="text" rows="1" maxlength="5000" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+      <button id="send" type="submit">发送</button>
+    </form>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
